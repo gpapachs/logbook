@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="el">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HACCP Logbook</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230b7a8c'/%3E%3Ctext x='50' y='68' font-size='58' text-anchor='middle' fill='white' font-family='sans-serif'%3E%E2%9D%84%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ============ ΟΘΟΝΗ ΣΥΝΔΕΣΗΣ ============ -->
+<div id="loginScreen" class="login-screen" hidden>
+  <div class="login-card">
+    <div class="login-brand">
+      <span class="brand-icon">❄</span>
+      <div>
+        <h1>HACCP Logbook</h1>
+        <p class="muted">Θερμοκρασίες ψυγείων &amp; πλάνο καθαρισμού</p>
+      </div>
+    </div>
+    <form id="loginForm" class="login-form">
+      <label>
+        <span>Email</span>
+        <input type="email" id="loginEmail" required autocomplete="username" />
+      </label>
+      <label>
+        <span>Κωδικός</span>
+        <input type="password" id="loginPassword" required autocomplete="current-password" />
+      </label>
+      <button type="submit" class="btn btn-primary btn-block">Σύνδεση</button>
+      <p id="loginError" class="error-text" hidden></p>
+    </form>
+    <p class="muted small">Ο λογαριασμός δημιουργείται από τον διαχειριστή στο Supabase (Authentication → Users).</p>
+  </div>
+</div>
+
+<!-- ============ ΚΥΡΙΑ ΕΦΑΡΜΟΓΗ ============ -->
+<div id="app" class="app" hidden>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-icon">❄</span>
+      <span class="brand-name">HACCP Logbook</span>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-view="dashboard">Ψυγεία</button>
+      <button class="tab" data-view="cleaning">Καθαρισμός</button>
+      <button class="tab" data-view="history">Ιστορικό</button>
+      <button class="tab" data-view="fridges">Ρυθμίσεις ψυγείων</button>
+      <button class="tab" data-view="cleaningTasks">Πλάνο καθαρισμού</button>
+      <button class="tab" data-view="users">Χρήστες</button>
+    </nav>
+    <div class="topbar-right">
+      <span id="userEmail" class="muted small"></span>
+      <button id="logoutBtn" class="btn btn-ghost btn-sm">Αποσύνδεση</button>
+    </div>
+  </header>
+
+  <main class="content">
+
+    <!-- ---- DASHBOARD ---- -->
+    <section id="view-dashboard" class="view">
+      <div class="view-head">
+        <div>
+          <h2>Σημερινή κατάσταση</h2>
+          <p class="muted" id="todayDate"></p>
+        </div>
+        <div class="summary-pills" id="summaryPills"></div>
+      </div>
+      <div id="fridgeGrid" class="fridge-grid"></div>
+    </section>
+
+    <!-- ---- CLEANING DASHBOARD ---- -->
+    <section id="view-cleaning" class="view" hidden>
+      <div class="view-head">
+        <div>
+          <h2>Πλάνο καθαρισμού — σημερινή κατάσταση</h2>
+          <p class="muted" id="cleaningTodayDate"></p>
+        </div>
+        <div class="summary-pills" id="cleaningSummaryPills"></div>
+      </div>
+      <div id="cleaningGroups"></div>
+    </section>
+
+    <!-- ---- HISTORY ---- -->
+    <section id="view-history" class="view" hidden>
+      <div class="view-head">
+        <h2>Ιστορικό καταγραφών</h2>
+      </div>
+      <div class="filters">
+        <label>
+          <span>Τύπος</span>
+          <select id="historyType">
+            <option value="fridges">Ψυγεία</option>
+            <option value="cleaning">Καθαρισμός</option>
+          </select>
+        </label>
+        <span id="fridgeFiltersGroup" class="filters-subgroup">
+          <label>
+            <span>Ψυγείο</span>
+            <select id="filterFridge"><option value="">Όλα</option></select>
+          </label>
+          <label>
+            <span>Κατάσταση</span>
+            <select id="filterStatus">
+              <option value="">Όλες</option>
+              <option value="ok">Εντός ορίων</option>
+              <option value="out">Εκτός ορίων</option>
+            </select>
+          </label>
+        </span>
+        <span id="cleaningFiltersGroup" class="filters-subgroup" hidden>
+          <label>
+            <span>Εργασία</span>
+            <select id="filterTask"><option value="">Όλες</option></select>
+          </label>
+          <label>
+            <span>Συχνότητα</span>
+            <select id="filterFrequency">
+              <option value="">Όλες</option>
+              <option value="daily">Καθημερινά</option>
+              <option value="weekly">Εβδομαδιαία</option>
+              <option value="monthly">Μηνιαία</option>
+            </select>
+          </label>
+        </span>
+        <label>
+          <span>Από</span>
+          <input type="date" id="filterFrom" />
+        </label>
+        <label>
+          <span>Έως</span>
+          <input type="date" id="filterTo" />
+        </label>
+        <button id="applyFilters" class="btn btn-secondary">Φίλτρο</button>
+        <span class="spacer"></span>
+        <button id="exportCsv" class="btn btn-secondary">⬇ CSV</button>
+        <button id="exportExcel" class="btn btn-secondary">⬇ Excel</button>
+        <button id="exportPdf" class="btn btn-primary">⬇ PDF</button>
+      </div>
+      <div id="fridgeHistoryTable" class="table-wrap">
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>Ημ/νία &amp; ώρα</th>
+              <th>Ψυγείο</th>
+              <th>Serial</th>
+              <th>Θερμ. (°C)</th>
+              <th>Κατάσταση</th>
+              <th>Διορθωτική ενέργεια</th>
+              <th>Σημείωση</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody"></tbody>
+        </table>
+        <p id="historyEmpty" class="muted empty-state" hidden>Δεν βρέθηκαν καταγραφές για τα επιλεγμένα φίλτρα.</p>
+      </div>
+      <div id="cleaningHistoryTable" class="table-wrap" hidden>
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>Ημ/νία &amp; ώρα</th>
+              <th>Εργασία</th>
+              <th>Συχνότητα</th>
+              <th>Κατάσταση</th>
+              <th>Υπεύθυνος</th>
+              <th>Σημείωση</th>
+            </tr>
+          </thead>
+          <tbody id="cleaningHistoryBody"></tbody>
+        </table>
+        <p id="cleaningHistoryEmpty" class="muted empty-state" hidden>Δεν βρέθηκαν καταγραφές για τα επιλεγμένα φίλτρα.</p>
+      </div>
+    </section>
+
+    <!-- ---- FRIDGES SETTINGS ---- -->
+    <section id="view-fridges" class="view" hidden>
+      <div class="view-head">
+        <h2>Ψυγεία &amp; καταψύκτες</h2>
+        <button id="newFridgeBtn" class="btn btn-primary">+ Νέο ψυγείο</button>
+      </div>
+      <div id="fridgeList" class="fridge-settings-list"></div>
+    </section>
+
+    <!-- ---- CLEANING TASKS SETTINGS ---- -->
+    <section id="view-cleaningTasks" class="view" hidden>
+      <div class="view-head">
+        <h2>Πλάνο καθαρισμού — εργασίες</h2>
+        <button id="newCleaningTaskBtn" class="btn btn-primary">+ Νέα εργασία</button>
+      </div>
+      <div id="cleaningTaskList" class="fridge-settings-list"></div>
+    </section>
+
+    <!-- ---- USERS ---- -->
+    <section id="view-users" class="view" hidden>
+      <div class="view-head">
+        <h2>Χρήστες</h2>
+        <button id="newUserBtn" class="btn btn-primary">+ Νέος χρήστης</button>
+      </div>
+      <p id="usersError" class="error-text" hidden></p>
+      <div id="userList" class="fridge-settings-list"></div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ============ MODAL: ΚΑΤΑΓΡΑΦΗ ΘΕΡΜΟΚΡΑΣΙΑΣ ============ -->
+<div id="logModal" class="modal-backdrop" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="logModalTitle">Καταγραφή θερμοκρασίας</h3>
+      <button class="icon-btn" data-close-modal>✕</button>
+    </div>
+    <form id="logForm" class="modal-body">
+      <input type="hidden" id="logFridgeId" />
+      <p class="modal-sub" id="logModalRange"></p>
+      <label>
+        <span>Θερμοκρασία (°C)</span>
+        <input type="text" inputmode="decimal" id="logTemp" required autofocus placeholder="π.χ. 3,5 ή -18" />
+      </label>
+      <label>
+        <span>Ώρα καταγραφής</span>
+        <input type="datetime-local" id="logTime" required />
+      </label>
+      <div id="logOutOfRangeBox" class="alert alert-danger" hidden>
+        <strong>Εκτός ορίων!</strong> Καταχώρισε διορθωτική ενέργεια.
+        <label class="stack">
+          <span>Διορθωτική ενέργεια</span>
+          <textarea id="logCorrective" rows="2" placeholder="π.χ. μεταφορά προϊόντων, κλήση τεχνικού..."></textarea>
+        </label>
+      </div>
+      <label>
+        <span>Σημείωση (προαιρετικό)</span>
+        <textarea id="logNote" rows="2"></textarea>
+      </label>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" data-close-modal>Άκυρο</button>
+        <button type="submit" class="btn btn-primary">Αποθήκευση</button>
+      </div>
+      <p id="logFormError" class="error-text" hidden></p>
+    </form>
+  </div>
+</div>
+
+<!-- ============ MODAL: ΝΕΟ / ΕΠΕΞΕΡΓΑΣΙΑ ΨΥΓΕΙΟΥ ============ -->
+<div id="fridgeModal" class="modal-backdrop" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="fridgeModalTitle">Νέο ψυγείο</h3>
+      <button class="icon-btn" data-close-modal>✕</button>
+    </div>
+    <form id="fridgeForm" class="modal-body">
+      <input type="hidden" id="fridgeId" />
+      <label>
+        <span>Όνομα</span>
+        <input type="text" id="fridgeName" required placeholder="π.χ. Ψυγείο Κουζίνας 2" />
+      </label>
+      <label>
+        <span>Serial number (προαιρετικό)</span>
+        <input type="text" id="fridgeSerial" placeholder="π.χ. SN-2024-0417" />
+      </label>
+      <label>
+        <span>Τύπος</span>
+        <select id="fridgeType">
+          <option value="ψυγείο">Ψυγείο (συντήρηση)</option>
+          <option value="κατάψυξη">Κατάψυξη</option>
+          <option value="θάλαμος">Ψυκτικός θάλαμος</option>
+        </select>
+      </label>
+      <div class="row-2">
+        <label>
+          <span>Ελάχιστη °C</span>
+          <input type="text" inputmode="decimal" id="fridgeMin" required placeholder="π.χ. 0" />
+        </label>
+        <label>
+          <span>Μέγιστη °C</span>
+          <input type="text" inputmode="decimal" id="fridgeMax" required placeholder="π.χ. 4" />
+        </label>
+      </div>
+      <label>
+        <span>Τοποθεσία (προαιρετικό)</span>
+        <input type="text" id="fridgeLocation" placeholder="π.χ. Κουζίνα, Αποθήκη..." />
+      </label>
+      <div class="modal-actions modal-actions-split">
+        <button type="button" id="deleteFridgeBtn" class="btn btn-danger-ghost" hidden>Διαγραφή</button>
+        <div class="spacer"></div>
+        <button type="button" class="btn btn-ghost" data-close-modal>Άκυρο</button>
+        <button type="submit" class="btn btn-primary">Αποθήκευση</button>
+      </div>
+      <p id="fridgeFormError" class="error-text" hidden></p>
+    </form>
+  </div>
+</div>
+
+<!-- ============ MODAL: ΚΑΤΑΓΡΑΦΗ ΚΑΘΑΡΙΣΜΟΥ ============ -->
+<div id="cleaningLogModal" class="modal-backdrop" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="cleaningLogModalTitle">Καταγραφή καθαρισμού</h3>
+      <button class="icon-btn" data-close-modal>✕</button>
+    </div>
+    <form id="cleaningLogForm" class="modal-body">
+      <input type="hidden" id="cleaningTaskId" />
+      <p class="modal-sub" id="cleaningLogModalSub"></p>
+      <label>
+        <span>Κατάσταση</span>
+        <select id="cleaningDone">
+          <option value="true">✓ Ολοκληρώθηκε</option>
+          <option value="false">✕ Δεν έγινε</option>
+        </select>
+      </label>
+      <label>
+        <span>Υπεύθυνος/η</span>
+        <input type="text" id="cleaningResponsible" required placeholder="Ονοματεπώνυμο" />
+      </label>
+      <label>
+        <span>Ώρα καταγραφής</span>
+        <input type="datetime-local" id="cleaningTime" required />
+      </label>
+      <label>
+        <span>Σημείωση (προαιρετικό)</span>
+        <textarea id="cleaningNote" rows="2"></textarea>
+      </label>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" data-close-modal>Άκυρο</button>
+        <button type="submit" class="btn btn-primary">Αποθήκευση</button>
+      </div>
+      <p id="cleaningLogFormError" class="error-text" hidden></p>
+    </form>
+  </div>
+</div>
+
+<!-- ============ MODAL: ΝΕΑ / ΕΠΕΞΕΡΓΑΣΙΑ ΕΡΓΑΣΙΑΣ ΚΑΘΑΡΙΣΜΟΥ ============ -->
+<div id="cleaningTaskModal" class="modal-backdrop" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="cleaningTaskModalTitle">Νέα εργασία καθαρισμού</h3>
+      <button class="icon-btn" data-close-modal>✕</button>
+    </div>
+    <form id="cleaningTaskForm" class="modal-body">
+      <input type="hidden" id="cleaningTaskFormId" />
+      <label>
+        <span>Τι καθαρίζεται</span>
+        <input type="text" id="cleaningTaskName" required placeholder="π.χ. Καθαρισμός πάγκων εργασίας" />
+      </label>
+      <label>
+        <span>Χώρος (προαιρετικό)</span>
+        <input type="text" id="cleaningTaskArea" placeholder="π.χ. Κουζίνα" />
+      </label>
+      <label>
+        <span>Συχνότητα</span>
+        <select id="cleaningTaskFrequency">
+          <option value="daily">Καθημερινά</option>
+          <option value="weekly">Εβδομαδιαία</option>
+          <option value="monthly">Μηνιαία</option>
+        </select>
+      </label>
+      <div class="modal-actions modal-actions-split">
+        <button type="button" id="deleteCleaningTaskBtn" class="btn btn-danger-ghost" hidden>Διαγραφή</button>
+        <div class="spacer"></div>
+        <button type="button" class="btn btn-ghost" data-close-modal>Άκυρο</button>
+        <button type="submit" class="btn btn-primary">Αποθήκευση</button>
+      </div>
+      <p id="cleaningTaskFormError" class="error-text" hidden></p>
+    </form>
+  </div>
+</div>
+
+<!-- ============ MODAL: ΝΕΟΣ ΧΡΗΣΤΗΣ ============ -->
+<div id="userModal" class="modal-backdrop" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Νέος χρήστης</h3>
+      <button class="icon-btn" data-close-modal>✕</button>
+    </div>
+    <form id="userForm" class="modal-body">
+      <label>
+        <span>Email</span>
+        <input type="email" id="newUserEmail" required autocomplete="off" />
+      </label>
+      <label>
+        <span>Κωδικός</span>
+        <input type="text" id="newUserPassword" required placeholder="τουλάχιστον 6 χαρακτήρες" autocomplete="off" />
+      </label>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" data-close-modal>Άκυρο</button>
+        <button type="submit" class="btn btn-primary">Δημιουργία</button>
+      </div>
+      <p id="userFormError" class="error-text" hidden></p>
+    </form>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="dejavu-sans-font.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

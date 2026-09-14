@@ -1,0 +1,80 @@
+name: Υπενθύμιση ημερήσιας καταγραφής θερμοκρασίας
+
+# Τρέχει δύο φορές την ημέρα (09:00 και 10:00 UTC) ώστε να πιάνει τις 12:00
+# ώρα Ελλάδας είτε σε χειμερινή είτε σε θερινή ώρα (η μία εκτέλεση κάθε
+# μέρα θα βρει τοπική ώρα 12 και θα προχωρήσει· η άλλη θα βρει 11 ή 13 και
+# θα σταματήσει αμέσως χωρίς να κάνει τίποτα).
+on:
+  schedule:
+    - cron: "0 9 * * *"
+    - cron: "0 10 * * *"
+  workflow_dispatch: {} # για χειροκίνητο τεστ από το tab "Actions" στο GitHub
+
+jobs:
+  check-and-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Έλεγχος ώρας Ελλάδας (προχωράει μόνο στις 12:00 τοπικά)
+        id: gate
+        run: |
+          HOUR=$(TZ=Europe/Athens date +%H)
+          echo "Τοπική ώρα Αθήνας τώρα: $HOUR"
+          if [ "$HOUR" = "12" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Εύρεση ψυγείων χωρίς σημερινή καταγραφή
+        id: check
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          TODAY=$(TZ=Europe/Athens date +%Y-%m-%d)
+          START_UTC=$(TZ=Europe/Athens date -d "$TODAY 00:00:00" -u +"%Y-%m-%dT%H:%M:%SZ")
+          END_UTC=$(TZ=Europe/Athens date -d "$TODAY 23:59:59" -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          FRIDGES_JSON=$(curl -s "$SUPABASE_URL/rest/v1/fridges?select=id,name&active=eq.true" \
+            -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY")
+          LOGS_JSON=$(curl -s "$SUPABASE_URL/rest/v1/logs?select=fridge_id&logged_at=gte.$START_UTC&logged_at=lte.$END_UTC" \
+            -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY")
+
+          MISSING=$(jq -n --argjson fridges "$FRIDGES_JSON" --argjson logs "$LOGS_JSON" '
+            ($logs | map(.fridge_id) | unique) as $logged
+            | [$fridges[] | select(.id as $id | ($logged | index($id)) | not) | .name]
+            | join("\n")
+          ')
+
+          if [ -n "$MISSING" ]; then
+            echo "has_missing=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "missing_list<<EOF"
+              echo "$MISSING"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "has_missing=false" >> "$GITHUB_OUTPUT"
+            echo "Όλα τα ψυγεία έχουν σημερινή καταγραφή — δεν στέλνεται email."
+          fi
+
+      - name: Αποστολή email υπενθύμισης
+        if: steps.gate.outputs.proceed == 'true' && steps.check.outputs.has_missing == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.GMAIL_ADDRESS }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          from: Logbook Θερμοκρασιών <${{ secrets.GMAIL_ADDRESS }}>
+          to: ${{ secrets.NOTIFY_EMAIL }}
+          subject: "⚠ Εκκρεμεί καταγραφή θερμοκρασίας ψυγείων"
+          body: |
+            Τα παρακάτω ψυγεία δεν έχουν σημερινή καταγραφή θερμοκρασίας:
+
+            ${{ steps.check.outputs.missing_list }}
+
+            Μπες στο Logbook και συμπλήρωσε τις μετρήσεις.
+
+            (Αυτόματη υπενθύμιση — στέλνεται μία φορά την ημέρα, γύρω στις 12:00.)

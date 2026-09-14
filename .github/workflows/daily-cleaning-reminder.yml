@@ -1,0 +1,131 @@
+name: Υπενθύμιση πλάνου καθαρισμού
+
+# Τρέχει δύο φορές την ημέρα (17:00 και 18:00 UTC) ώστε να πιάνει τις 20:00
+# ώρα Ελλάδας είτε σε χειμερινή είτε σε θερινή ώρα (η μία εκτέλεση κάθε
+# μέρα θα βρει τοπική ώρα 20 και θα προχωρήσει· η άλλη θα βρει 19 ή 21 και
+# θα σταματήσει αμέσως χωρίς να κάνει τίποτα).
+#
+# Ημερήσιες εργασίες ελέγχονται κάθε μέρα. Εβδομαδιαίες ελέγχονται μόνο
+# Κυριακή (τελευταία μέρα της εβδομάδας). Μηνιαίες ελέγχονται μόνο την
+# τελευταία μέρα του μήνα. Έτσι δεν στέλνεται ψεύτικη υπενθύμιση στη μέση
+# της περιόδου μιας εβδομαδιαίας/μηνιαίας εργασίας.
+on:
+  schedule:
+    - cron: "0 17 * * *"
+    - cron: "0 18 * * *"
+  workflow_dispatch: {} # για χειροκίνητο τεστ από το tab "Actions" στο GitHub
+
+jobs:
+  check-and-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Έλεγχος ώρας Ελλάδας (προχωράει μόνο στις 20:00 τοπικά)
+        id: gate
+        run: |
+          HOUR=$(TZ=Europe/Athens date +%H)
+          echo "Τοπική ώρα Αθήνας τώρα: $HOUR"
+          if [ "$HOUR" = "20" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Εύρεση εργασιών καθαρισμού χωρίς καταγραφή στην περίοδό τους
+        id: check
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          TODAY=$(TZ=Europe/Athens date +%Y-%m-%d)
+          END_UTC=$(TZ=Europe/Athens date -d "$TODAY 23:59:59" -u +"%Y-%m-%dT%H:%M:%SZ")
+          DAILY_START_UTC=$(TZ=Europe/Athens date -d "$TODAY 00:00:00" -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          DOW=$(TZ=Europe/Athens date -d "$TODAY" +%u)   # 1=Δευτέρα ... 7=Κυριακή
+          WEEK_START_DATE=$(TZ=Europe/Athens date -d "$TODAY -$(( DOW - 1 )) day" +%Y-%m-%d)
+          WEEK_START_UTC=$(TZ=Europe/Athens date -d "$WEEK_START_DATE 00:00:00" -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          MONTH_START_DATE=$(TZ=Europe/Athens date -d "$TODAY" +%Y-%m-01)
+          MONTH_START_UTC=$(TZ=Europe/Athens date -d "$MONTH_START_DATE 00:00:00" -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          TOMORROW_DOM=$(TZ=Europe/Athens date -d "$TODAY +1 day" +%d)
+          CHECK_WEEKLY=false
+          [ "$DOW" = "7" ] && CHECK_WEEKLY=true
+          CHECK_MONTHLY=false
+          [ "$TOMORROW_DOM" = "01" ] && CHECK_MONTHLY=true
+          echo "Έλεγχος εβδομαδιαίων: $CHECK_WEEKLY · Έλεγχος μηνιαίων: $CHECK_MONTHLY"
+
+          TASKS_JSON=$(curl -s "$SUPABASE_URL/rest/v1/cleaning_tasks?select=id,name,frequency&active=eq.true" \
+            -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY")
+          DAILY_LOGS_JSON=$(curl -s "$SUPABASE_URL/rest/v1/cleaning_logs?select=task_id&logged_at=gte.$DAILY_START_UTC&logged_at=lte.$END_UTC" \
+            -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY")
+
+          WEEKLY_LOGS_JSON="[]"
+          if [ "$CHECK_WEEKLY" = "true" ]; then
+            WEEKLY_LOGS_JSON=$(curl -s "$SUPABASE_URL/rest/v1/cleaning_logs?select=task_id&logged_at=gte.$WEEK_START_UTC&logged_at=lte.$END_UTC" \
+              -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY")
+          fi
+
+          MONTHLY_LOGS_JSON="[]"
+          if [ "$CHECK_MONTHLY" = "true" ]; then
+            MONTHLY_LOGS_JSON=$(curl -s "$SUPABASE_URL/rest/v1/cleaning_logs?select=task_id&logged_at=gte.$MONTH_START_UTC&logged_at=lte.$END_UTC" \
+              -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY")
+          fi
+
+          MISSING=$(jq -n \
+            --argjson tasks "$TASKS_JSON" \
+            --argjson dailyLogs "$DAILY_LOGS_JSON" \
+            --argjson weeklyLogs "$WEEKLY_LOGS_JSON" \
+            --argjson monthlyLogs "$MONTHLY_LOGS_JSON" \
+            --argjson checkWeekly $CHECK_WEEKLY \
+            --argjson checkMonthly $CHECK_MONTHLY '
+            ($dailyLogs | map(.task_id) | unique) as $daily
+            | ($weeklyLogs | map(.task_id) | unique) as $weekly
+            | ($monthlyLogs | map(.task_id) | unique) as $monthly
+            | [$tasks[]
+                | select(
+                    (.frequency == "daily")
+                    or (.frequency == "weekly" and $checkWeekly)
+                    or (.frequency == "monthly" and $checkMonthly)
+                  )
+                | select(
+                    (.frequency == "daily" and (($daily | index(.id)) | not))
+                    or (.frequency == "weekly" and (($weekly | index(.id)) | not))
+                    or (.frequency == "monthly" and (($monthly | index(.id)) | not))
+                  )
+                | .name
+              ] | join("\n")
+          ')
+
+          if [ -n "$MISSING" ]; then
+            echo "has_missing=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "missing_list<<EOF"
+              echo "$MISSING"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "has_missing=false" >> "$GITHUB_OUTPUT"
+            echo "Όλες οι εργασίες καθαρισμού έχουν καταγραφή για την περίοδό τους — δεν στέλνεται email."
+          fi
+
+      - name: Αποστολή email υπενθύμισης
+        if: steps.gate.outputs.proceed == 'true' && steps.check.outputs.has_missing == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.GMAIL_ADDRESS }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          from: HACCP Logbook <${{ secrets.GMAIL_ADDRESS }}>
+          to: ${{ secrets.NOTIFY_EMAIL }}
+          subject: "⚠ Εκκρεμεί καταγραφή πλάνου καθαρισμού"
+          body: |
+            Οι παρακάτω εργασίες καθαρισμού δεν έχουν καταγραφή για την τρέχουσα περίοδό τους:
+
+            ${{ steps.check.outputs.missing_list }}
+
+            Μπες στο HACCP Logbook (καρτέλα "Καθαρισμός") και συμπλήρωσε την καταγραφή.
+
+            (Αυτόματη υπενθύμιση — στέλνεται γύρω στις 20:00. Εβδομαδιαίες εργασίες ελέγχονται
+            Κυριακή, μηνιαίες την τελευταία μέρα του μήνα.)
