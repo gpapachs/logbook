@@ -17,13 +17,12 @@ jobs:
       - name: Έλεγχος ώρας Ελλάδας (προχωράει μόνο στις 12:00 τοπικά)
         id: gate
         run: |
+
+
+        echo "proceed=true" >> "$GITHUB_OUTPUT"
           HOUR=$(TZ=Europe/Athens date +%H)
           echo "Τοπική ώρα Αθήνας τώρα: $HOUR"
-          if [ "$HOUR" = "12" ]; then
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-          fi
+          
 
       - name: Εύρεση ψυγείων χωρίς σημερινή καταγραφή
         id: check
